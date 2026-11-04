@@ -4,6 +4,8 @@ Improve native Bases Kanban boards with manual card order, compact cards, collap
 
 It extends Obsidian's built-in Bases Kanban layout and does not add a separate view.
 
+![A Bases Kanban board with compact cards, fitted columns, an empty Due property hidden, and a collapsed done column](docs/screenshot.png)
+
 ## Features
 
 Every feature has its own switch in the settings, and changes apply to open boards right away.
