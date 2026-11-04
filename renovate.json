@@ -1,0 +1,17 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/Berlin",
+  "schedule": ["before 6am on monday"],
+  "dependencyDashboard": true,
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 3,
+  "packageRules": [
+    {
+      "description": "Group routine development dependency updates",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "development dependencies"
+    }
+  ]
+}

@@ -17,7 +17,8 @@ test('plugin entry has no Node or Electron runtime import and mobile manifest is
   const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', here), 'utf8'));
   assert.equal(manifest.isDesktopOnly, false);
   assert.equal(manifest.id, 'bases-kanban-toolbox');
-  assert.equal(manifest.version, '1.0.0');
+  // test/release.test.js checks that package, manifest and versions.json agree; any later release must still pass here.
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.equal(manifest.minAppVersion, '1.14.0');
 });
 
