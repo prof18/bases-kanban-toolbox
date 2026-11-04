@@ -1,0 +1,123 @@
+.bases-kanban-card.bkt-wrap .bases-kanban-card-property.mod-title .bases-kanban-card-line {
+  white-space: normal;
+  line-height: 1.4;
+  height: auto;
+  max-height: none;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  text-overflow: clip;
+}
+
+.bkt-order-marker {
+  position: fixed;
+  height: 3px;
+  background: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--background-primary);
+  pointer-events: none;
+  z-index: 10000;
+}
+
+.bkt-collapse {
+  --icon-size: var(--icon-s);
+  --icon-stroke: var(--icon-s-stroke-width);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline-start: calc(-1 * var(--size-4-1));
+  color: var(--text-faint);
+}
+
+.bases-kanban-column-header:hover .bkt-collapse {
+  color: var(--text-muted);
+}
+
+/* Columns end below their last card, and collapsed strips below their title;
+   native stretches every column to the board height. */
+.bases-kanban-container.bkt-fit:not(.bkt-dragging) > .bases-kanban-column {
+  bottom: auto !important;
+  max-height: calc(100% - var(--bkt-pad-block, 0px));
+}
+
+.bases-kanban-container.bkt-fit:not(.bkt-dragging) > .bases-kanban-column:not(.bkt-collapsed) > .bases-kanban-column-content {
+  flex: 0 1 auto;
+}
+
+.bases-kanban-column.bkt-collapsed .bases-kanban-column-content,
+.bases-kanban-column.bkt-collapsed .bases-kanban-column-footer,
+.bases-kanban-column.bkt-collapsed .bases-kanban-column-create {
+  display: none;
+}
+
+.bases-kanban-column.bkt-collapsed .bases-kanban-column-header {
+  flex: 0 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--size-4-2) 0;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.bases-kanban-column.bkt-collapsed .bkt-collapse {
+  margin: 0;
+}
+
+.bases-kanban-column.bkt-collapsed .bases-group-heading {
+  writing-mode: vertical-rl;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 0;
+}
+
+.bases-kanban-column.bkt-collapsed .bases-kanban-column-count {
+  order: -1;
+}
+
+/* Card popup: the note opens over the board instead of replacing it. */
+.modal.bkt-card-modal {
+  width: min(760px, 92vw);
+  height: min(85vh, 900px);
+  max-height: 85vh;
+}
+
+.bkt-card-modal .modal-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.bkt-card-actions {
+  display: flex;
+  justify-content: flex-start;
+  padding-bottom: var(--size-4-2);
+  padding-inline-end: var(--size-4-8);
+}
+
+.bkt-card-open {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  --icon-size: var(--icon-s);
+}
+
+.bkt-card-note.markdown-embed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.bkt-card-note.markdown-embed .markdown-embed-content {
+  max-height: none;
+}
+
+.is-phone .modal.bkt-card-modal {
+  width: 100vw;
+  height: 100%;
+  max-height: 100%;
+}

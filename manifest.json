@@ -1,0 +1,10 @@
+{
+  "id": "bases-kanban-toolbox",
+  "name": "Bases Kanban Toolbox",
+  "version": "1.0.0",
+  "minAppVersion": "1.14.0",
+  "description": "Improve native Bases Kanban boards with manual card order, compact cards, collapsible columns, a card popup and more.",
+  "author": "Marco Gomiero",
+  "authorUrl": "https://www.marcogomiero.com",
+  "isDesktopOnly": false
+}
