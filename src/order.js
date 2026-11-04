@@ -28,7 +28,15 @@ export function dropSlot(y, top, height, gap, count) {
   return Math.max(0, Math.min(count, Math.floor((y - top + height / 2) / (height + gap))));
 }
 
-export function contextFor(app, version, drag, target, property) {
+// The order property must be first and ascending. Other sorts cannot silently turn into editable ranks.
+export function sortedBy(sort, property) {
+  const ids = [property, 'note.' + property];
+  return Array.isArray(sort) && ids.includes(sort[0]?.property) && sort[0].direction === 'ASC'
+    && !sort.slice(1).some(row => ids.includes(row.property));
+}
+
+// allowUnsorted accepts a board that is not sorted by the property, if the board can be sorted by it afterwards.
+export function contextFor(app, version, drag, target, property, { allowUnsorted = false } = {}) {
   if (!supported(version) || drag?.type !== 'kanban-card') return null;
   const view = drag.view;
   if (!view || view.type !== 'kanban' || view.app !== app || view.isReadOnly || !Array.isArray(view.columns)) return null;
@@ -39,17 +47,15 @@ export function contextFor(app, version, drag, target, property) {
   if (groupProperty === property) return null;
   if (typeof config.getLimit !== 'function' || config.getLimit() !== 0 || typeof config.getSort !== 'function') return null;
   if (typeof view.queryController?.getSearchQuery !== 'function' || view.queryController.getSearchQuery()?.trim()) return null;
-  const sort = config.getSort();
-  // Position must be first. Other sorts cannot silently turn into editable ranks.
-  if (!Array.isArray(sort) || ![property, 'note.' + property].includes(sort[0]?.property) || sort[0].direction !== 'ASC') return null;
-  if (sort.slice(1).some(row => [property, 'note.' + property].includes(row.property))) return null;
+  const sorted = sortedBy(config.getSort(), property);
+  if (!sorted && (!allowUnsorted || typeof config.setSortProperty !== 'function')) return null;
   const element = target?.closest?.('.bases-kanban-column');
   const column = view.columns.find(item => item.containerEl === element);
   if (!column?.innerEl || !column.group || column.group !== drag.sourceGroup || !Array.isArray(column.group.entries)) return null;
   const files = column.group.entries.map(entry => entry.file);
   if (!files.length || files.length > MAX_CARDS || !files.includes(drag.entry?.file)) return null;
   if (!Number.isFinite(view.measurements?.cardHeight) || !Number.isFinite(view.measurements.cardGap)) return null;
-  return { view, column, files, moved: drag.entry.file, groupProperty };
+  return { view, column, files, moved: drag.entry.file, groupProperty, sorted };
 }
 
 export function planOrder(files, moved, slot, property, groupProperty, metadata) {

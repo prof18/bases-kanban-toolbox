@@ -1,4 +1,4 @@
-import { test, beforeEach } from 'vitest';
+import { test, beforeEach, vi } from 'vitest';
 import assert from 'node:assert/strict';
 import { setApiVersion, resetNotices } from 'obsidian';
 import { fixture } from './fixture.js';
@@ -142,4 +142,115 @@ test('settings that are read per event do not rebuild the modules', async () => 
   await f.plugin.updateSettings(s => { s.autoSort = false; });
   assert.equal(f.plugin.collapse, collapse);
   assert.equal(f.plugin.scroll, scroll);
+});
+
+// dropSlot decides the slot: clientY 100 is the top (slot 0), 300 is the third card's own slot (slot 2).
+const useDropSlot = plugin => { if (plugin.compact) vi.spyOn(plugin.compact, 'forColumn').mockReturnValue(null); };
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('a configured order property is written instead of Position', async () => {
+  const f = await fixture({ orderProperty: 'Rank' });
+  f.files.forEach((file, i) => { file.fm.Rank = i + 1; });
+  f.view.config.getSort = () => [{ property: 'note.Rank', direction: 'ASC' }];
+  useDropSlot(f.plugin);
+  const drop = f.event(100);
+  f.plugin.handleDrag(drop, true);
+  await settle();
+  assert.equal(drop.prevented, true);
+  assert.deepEqual(f.files.map(file => file.fm.Rank), [2, 3, 1]);
+  assert.deepEqual(f.files.map(file => file.fm.Position), [1, 2, 3]);
+});
+
+// An unsorted board whose config can sort, recording each setSortProperty call.
+async function unsorted(data = null, positions = [1, 2, 3]) {
+  const f = await fixture(data);
+  f.files.forEach((file, i) => { if (positions[i] === undefined) delete file.fm.Position; else file.fm.Position = positions[i]; });
+  f.view.config.getSort = () => [{ property: 'note.Status', direction: 'ASC' }];
+  f.view.config.setSortProperty = function(p, d) { this.sortCalls = [...(this.sortCalls || []), [p, d]]; };
+  useDropSlot(f.plugin);
+  return f;
+}
+const positions = f => f.files.map(file => file.fm.Position);
+
+test('the first reorder on an unsorted board writes ranks, then sorts the board by them', async () => {
+  const f = await unsorted();
+  const drop = f.event(100);
+  f.plugin.handleDrag(drop, true);
+  await settle();
+  assert.equal(drop.prevented, true);
+  assert.deepEqual(positions(f), [2, 3, 1]);
+  assert.deepEqual(f.view.config.sortCalls, [['note.Position', 'ASC']]);
+  assert.equal(f.notices.length, 1);
+  assert.match(f.notices[0], /now sorted by Position/);
+});
+
+test('when ranks already match the new order, the board is only sorted', async () => {
+  const f = await unsorted(null, [2, 3, 1]);
+  let writes = 0;
+  const process = f.app.fileManager.processFrontMatter;
+  f.app.fileManager.processFrontMatter = async (...args) => { writes++; return process(...args); };
+  const drop = f.event(100);
+  f.plugin.handleDrag(drop, true);
+  await settle();
+  assert.equal(writes, 0);
+  assert.equal(drop.prevented, true);
+  assert.deepEqual(positions(f), [2, 3, 1]);
+  assert.deepEqual(f.view.config.sortCalls, [['note.Position', 'ASC']]);
+});
+
+test('with automatic sorting off, unsorted boards stay native', async () => {
+  const f = await unsorted({ autoSort: false });
+  const drop = f.event(100);
+  f.plugin.handleDrag(drop, true);
+  await settle();
+  assert.equal(drop.prevented, false);
+  assert.deepEqual(positions(f), [1, 2, 3]);
+  assert.equal(f.view.config.sortCalls, undefined);
+});
+
+test('a board already sorted by the order property is not sorted again', async () => {
+  const f = await fixture();
+  f.view.config.setSortProperty = function(p, d) { this.sortCalls = [...(this.sortCalls || []), [p, d]]; };
+  useDropSlot(f.plugin);
+  f.plugin.handleDrag(f.event(100), true);
+  await settle();
+  assert.deepEqual(positions(f), [2, 3, 1]);
+  assert.equal(f.view.config.sortCalls, undefined);
+});
+
+test('dropping a card back into its own slot on an unsorted board does nothing', async () => {
+  for (const start of [[undefined, undefined, undefined], [10, 20, 30]]) {
+    const f = await unsorted(null, start);
+    const drop = f.event(300);
+    f.plugin.handleDrag(drop, true);
+    await settle();
+    assert.equal(drop.prevented, false, JSON.stringify(start));
+    assert.deepEqual(positions(f), start.every(value => value === undefined) ? [undefined, undefined, undefined] : start);
+    assert.equal(f.view.config.sortCalls, undefined);
+  }
+});
+
+test('settings changed while the notes are saving stop the sort', async () => {
+  for (const change of [s => { s.autoSort = false; }, s => { s.features.manualOrder = false; }]) {
+    const f = await unsorted();
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    const process = f.app.fileManager.processFrontMatter;
+    f.app.fileManager.processFrontMatter = async (...args) => { await held; return process(...args); };
+    f.plugin.handleDrag(f.event(100), true);
+    await f.plugin.updateSettings(change);
+    release();
+    for (let i = 0; i < 5; i++) await settle();
+    assert.deepEqual(positions(f), [2, 3, 1]);
+    assert.equal(f.view.config.sortCalls, undefined);
+  }
+});
+
+test('a failed sort keeps the written ranks and says so', async () => {
+  const f = await unsorted();
+  f.view.config.setSortProperty = () => { throw new Error('read-only'); };
+  f.plugin.handleDrag(f.event(100), true);
+  await settle();
+  assert.deepEqual(positions(f), [2, 3, 1]);
+  assert.match(f.notices.at(-1), /could not be sorted/);
 });

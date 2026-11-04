@@ -1,14 +1,15 @@
 import { patchMethod } from './patch.js';
 
-const reference = prop => prop === 'Reference' || prop === 'note.Reference';
-function emptyReference(entry, prop) {
+function emptyValue(entry, prop) {
   const value = entry.getValue(prop);
+  // Dates and other values without data are empty only when falsy, as a missing value is.
+  if (value != null && !('data' in value)) return typeof value.isTruthy === 'function' && !value.isTruthy();
   return value == null || value.data == null || value.data === '' || (Array.isArray(value.data) && value.data.length === 0);
 }
-export function rowsFor(entries, properties, measurements, titleHeightFor) {
+export function rowsFor(entries, properties, measurements, titleHeightFor, hideWhenEmpty = []) {
   let top = 0;
   const rows = entries.map(entry => {
-    const hidden = properties.map((prop, index) => index > 0 && reference(prop) && emptyReference(entry, prop));
+    const hidden = properties.map((prop, index) => index > 0 && hideWhenEmpty.some(name => prop === name || prop === 'note.' + name) && emptyValue(entry, prop));
     const measured = titleHeightFor?.(entry, properties[0]);
     const titleHeight = Math.max(measurements.titleHeight, Number.isFinite(measured) && measured > 0 ? measured : measurements.titleHeight);
     const height = measurements.cardHeight - hidden.filter(Boolean).length * (measurements.propHeight + measurements.propGap)
@@ -122,7 +123,7 @@ export class CompactLayout {
         }
         // The native parent also reserves a uniform height for embedded Bases.
         if (view.scrollEl.matchParent('.block-language-base,.bases-embed')) {
-          const height = Math.max(0, ...view.columns.map(column => manager.forColumn(column)?.height ?? rowsFor(column.group.entries, view.data.properties, view.measurements).height));
+          const height = Math.max(0, ...view.columns.map(column => manager.forColumn(column)?.height ?? rowsFor(column.group.entries, view.data.properties, view.measurements, undefined, manager.options().hideWhenEmpty).height));
           view.containerEl.style.height = view.measurements.pad.top + view.measurements.columnHeight + height + view.measurements.pad.bottom + 'px';
         }
       }
@@ -150,7 +151,7 @@ export class CompactLayout {
       const view = column.view, measurements = view.measurements;
       const measurer = manager.titleMeasurer(column);
       let layout;
-      try { layout = rowsFor(column.group.entries, view.data.properties, measurements, measurer?.measure); }
+      try { layout = rowsFor(column.group.entries, view.data.properties, measurements, measurer?.measure, manager.options().hideWhenEmpty); }
       finally { measurer?.detach(); }
       manager.layouts.set(column, layout);
       column.innerEl.style.height = layout.height + 'px';

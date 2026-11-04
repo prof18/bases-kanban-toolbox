@@ -1,5 +1,5 @@
 import { Plugin, Modal, Notice, TFile, apiVersion, getFrontMatterInfo, parseYaml, setIcon } from 'obsidian';
-import { MIN_VERSION, supported, contextFor, planOrder, dropSlot, applyOrder } from './order.js';
+import { MIN_VERSION, supported, contextFor, planOrder, dropSlot, applyOrder, reorder } from './order.js';
 import { CompactLayout, slotForRows, boundaryForRows } from './layout.js';
 import { CollapsedStore, ColumnCollapse } from './collapse.js';
 import { ScrollMemory } from './scroll.js';
@@ -7,7 +7,6 @@ import { cardContext, addMoveItems } from './move.js';
 import { peekTarget, createCardModal } from './peek.js';
 import { normalizeSettings } from './settings.js';
 import { ToolboxSettingTab } from './settings-tab.js';
-const PROPERTY = 'Position';
 
 export default class BasesKanbanToolbox extends Plugin {
   async onload() {
@@ -169,25 +168,34 @@ export default class BasesKanbanToolbox extends Plugin {
     this.clearMarker();
     if (!this.active || event.defaultPrevented) return;
     try {
-      const context = contextFor(this.app, apiVersion, this.app.dragManager?.draggable, event.target, PROPERTY);
+      const property = this.settings.orderProperty;
+      const context = contextFor(this.app, apiVersion, this.app.dragManager?.draggable, event.target, property, { allowUnsorted: this.settings.autoSort });
       if (!context) return;
       const { view, column, files, moved, groupProperty } = context;
       const top = column.innerEl.getBoundingClientRect().top;
       const layout = this.compact?.forColumn(column);
       const slot = layout ? slotForRows(event.clientY - top, layout.rows)
         : dropSlot(event.clientY, top, view.measurements.cardHeight, view.measurements.cardGap, files.length);
-      const plan = planOrder(files, moved, slot, PROPERTY, groupProperty, file => this.app.metadataCache.getFileCache(file)?.frontmatter);
-      if (!plan) return;
+      // On an unsorted board, a drop that moves nothing stays native: no ranks, no sort.
+      if (!context.sorted && reorder(files, moved, slot).every((file, index) => file === files[index])) return;
+      const plan = planOrder(files, moved, slot, property, groupProperty, file => this.app.metadataCache.getFileCache(file)?.frontmatter);
+      // Without changes, an unsorted board still needs its sort: the stored ranks may already match the new order.
+      if (!plan && context.sorted) return;
       event.preventDefault();
       if (dropping) {
         event.stopPropagation();
         if (this.busy) return new Notice('The previous card reorder is still saving.');
+        if (!plan) { this.sortBoard(view, property); return; }
         const sort = JSON.stringify(view.config.getSort()), group = view.config.groupBy.property;
         const entryPaths = files.map(file => file.path);
         void this.save(plan, () => view.containerEl.isConnected && JSON.stringify(view.config.getSort()) === sort
           && view.config.groupBy?.property === group && view.config.getLimit() === 0 && !view.queryController.getSearchQuery()?.trim()
           && column.group.entries.length === files.length && column.group.entries.every(entry => entryPaths.includes(entry.file.path)),
-        () => column.group.entries.every((entry, index) => entry.file.path === entryPaths[index]));
+        () => column.group.entries.every((entry, index) => entry.file.path === entryPaths[index])).then(saved => {
+          // Settings can change while the notes are being written; read them again before touching the .base file.
+          const s = this.settings;
+          if (saved && !context.sorted && this.active && s.autoSort && s.features.manualOrder && s.orderProperty === property) this.sortBoard(view, property);
+        });
       } else {
         if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
         const rect = column.contentEl.getBoundingClientRect();
@@ -202,16 +210,26 @@ export default class BasesKanbanToolbox extends Plugin {
       }
     } catch (error) { if (dropping) new Notice('Card order unchanged: ' + error.message, 8000); }
   }
+  // Resolves to true once every note is written, false otherwise.
   async save(plan, viewUnchanged = () => true, orderUnchanged = () => true) {
-    if (this.busy) return;
+    if (this.busy) return false;
     this.busy = true;
     this.lastError = null;
     try {
       this.undoPlan = await applyOrder(plan, this.io(), () => this.active && supported(apiVersion) && viewUnchanged(), orderUnchanged);
+      return true;
     } catch (error) {
       this.lastError = error.message;
       new Notice('Card reorder failed: ' + error.message, 10000);
+      return false;
     } finally { this.busy = false; }
+  }
+  // The column now has ranks 1..N in the order the user made; sorting by them keeps it.
+  sortBoard(view, property) {
+    try {
+      view.config.setSortProperty('note.' + property, 'ASC');
+      new Notice('This board is now sorted by ' + property + ', so cards stay where you put them.');
+    } catch (error) { new Notice('Card order saved, but the board could not be sorted by ' + property + ': ' + error.message, 10000); }
   }
   async undo() {
     if (this.busy) return new Notice('Wait for the current reorder to finish.');

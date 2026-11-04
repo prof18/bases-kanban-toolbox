@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { reorder, dropSlot, planOrder, applyOrder, contextFor, supported } from '../src/order.js';
+import { reorder, dropSlot, planOrder, applyOrder, contextFor, supported, sortedBy } from '../src/order.js';
 const makeFiles = () => ['A', 'B', 'C'].map((name, i) => ({ path: 'items/' + name + '.md', parent: { path: 'items' }, extension: 'md', fm: { Status: 'Todo', Position: i + 1, Reference: 'keep', description: 'unchanged' } }));
 const makeSizedFiles = count => Array.from({ length: count }, (_, i) => ({ path: `items/${i}.md`, parent: { path: 'items' }, extension: 'md', fm: { Status: 'Todo', Position: i + 1, Reference: `https://example.test/${i}`, description: `card ${i}`, Extra: { stable: i } } }));
 const plan = files => planOrder(files, files[2], 0, 'Position', 'Status', file => file.fm);
@@ -148,4 +148,26 @@ test('supported accepts 1.14.0 and later with no upper bound', () => {
   assert.equal(supported('1.14.0'), true);
   assert.equal(supported('1.13.9'), false);
   assert.equal(supported('2.0.0'), true);
+});
+
+test('sortedBy needs the order property first and ascending, and only once', () => {
+  assert.equal(sortedBy([{ property: 'note.Position', direction: 'ASC' }], 'Position'), true);
+  assert.equal(sortedBy([{ property: 'Position', direction: 'ASC' }], 'Position'), true);
+  assert.equal(sortedBy([{ property: 'note.Position', direction: 'DESC' }], 'Position'), false);
+  assert.equal(sortedBy([{ property: 'note.Status', direction: 'ASC' }, { property: 'note.Position', direction: 'ASC' }], 'Position'), false);
+  assert.equal(sortedBy([], 'Position'), false);
+  assert.equal(sortedBy([{ property: 'note.Position', direction: 'ASC' }, { property: 'Position', direction: 'DESC' }], 'Position'), false);
+});
+
+test('unsorted boards give a context only when allowed and the config can sort', () => {
+  const f = nativeFixture();
+  f.view.config.getSort = () => [{ property: 'note.Status', direction: 'ASC' }];
+  assert.equal(contextFor(f.app, '1.14.4', f.drag, f.target, 'Position'), null);
+  assert.equal(contextFor(f.app, '1.14.4', f.drag, f.target, 'Position', { allowUnsorted: true }), null, 'no setSortProperty');
+  f.view.config.setSortProperty = () => {};
+  const context = contextFor(f.app, '1.14.4', f.drag, f.target, 'Position', { allowUnsorted: true });
+  assert.ok(context);
+  assert.equal(context.sorted, false);
+  f.view.config.getSort = () => [{ property: 'Position', direction: 'ASC' }];
+  assert.equal(contextFor(f.app, '1.14.4', f.drag, f.target, 'Position').sorted, true);
 });
