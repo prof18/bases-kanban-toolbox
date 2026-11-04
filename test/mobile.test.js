@@ -1,42 +1,15 @@
 import { test, beforeEach } from 'vitest';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { TFile, notices, setApiVersion, resetNotices } from 'obsidian';
+import { notices, setApiVersion, resetNotices } from 'obsidian';
 import PluginClass from '../src/main.js';
+import { fixture } from './fixture.js';
 
 // Vite rewrites new URL(literal, import.meta.url) into a dev-server URL; a variable base avoids that.
 const here = import.meta.url;
 const mainSource = fs.readFileSync(new URL('../src/main.js', here), 'utf8');
 
 beforeEach(() => { setApiVersion('1.14.4'); resetNotices(); });
-
-function fixture() {
-  setApiVersion('1.14.4'); resetNotices();
-  const files = ['A', 'B', 'C'].map((name, i) => {
-    const file = new TFile(`items/${name}.md`);
-    file.fm = { Status: 'Todo', Position: i + 1, title: name, untouched: true };
-    return file;
-  });
-  const group = { entries: files.map(file => ({ file })) };
-  const column = { containerEl: {}, innerEl: { getBoundingClientRect: () => ({ top: 100 }) }, contentEl: { getBoundingClientRect: () => ({ top: 100, bottom: 500, left: 20, width: 300 }) }, group };
-  const view = { type: 'kanban', app: null, isReadOnly: false, columns: [column], measurements: { cardHeight: 80, cardGap: 16 },
-    config: { groupBy: { property: 'Status' }, getSort: () => [{ property: 'Position', direction: 'ASC' }], getLimit: () => 0 },
-    queryController: { getSearchQuery: () => '' }, containerEl: { isConnected: true } };
-  const app = { dragManager: { draggable: { type: 'kanban-card', view, sourceGroup: group, entry: group.entries[2] } }, metadataCache: { getFileCache: file => ({ frontmatter: file.fm }) },
-    vault: { getAbstractFileByPath: filePath => files.find(file => file.path === filePath), read: async file => JSON.stringify(file.fm), on() { return {}; } },
-    fileManager: { processFrontMatter: async (file, callback) => callback(file.fm) }, internalPlugins: { plugins: {} }, workspace: null };
-  view.app = app;
-  const doc = { listeners: {}, addEventListener(type, callback) { this.listeners[type] = callback; }, createElement: () => ({ style: {}, remove() { this.removed = true; } }), body: { appendChild(node) { node.attached = true; } } };
-  const workspace = { containerEl: { ownerDocument: doc }, onLayoutReady(callback) { this.ready = callback; }, on() { return {}; }, iterateAllLeaves() {} };
-  app.workspace = workspace;
-  const plugin = new PluginClass(app);
-  plugin.onload();
-  plugin.active = true;
-  const target = { ownerDocument: doc, closest: selector => selector === '.bases-kanban-column' ? column.containerEl : null };
-  const event = (y, overrides = {}) => ({ target, clientY: y, defaultPrevented: false, prevented: false, stopped: false,
-    preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...overrides });
-  return { plugin, app, doc, files, group, column, view, target, event, notices };
-}
 
 test('plugin entry has no Node or Electron runtime import and mobile manifest is enabled', () => {
   assert.doesNotMatch(mainSource, /require\(['"](?:node:)?(?:fs|path|electron|child_process|os|process)(?:['"]|\/)/);
@@ -48,8 +21,8 @@ test('plugin entry has no Node or Electron runtime import and mobile manifest is
   assert.equal(manifest.minAppVersion, '1.14.0');
 });
 
-test('initializes on Obsidian 1.14.4 mobile-style runtime and registers native drag listeners', () => {
-  const f = fixture();
+test('initializes on Obsidian 1.14.4 mobile-style runtime and registers native drag listeners', async () => {
+  const f = await fixture();
   assert.equal(f.plugin.active, true);
   f.plugin.registerDocuments();
   assert.equal(typeof f.doc.listeners.dragover, 'function');
@@ -57,25 +30,25 @@ test('initializes on Obsidian 1.14.4 mobile-style runtime and registers native d
   assert.equal(f.notices.length, 0);
 });
 
-test('newer Obsidian releases initialize; older ones are refused with a notice', () => {
+test('newer Obsidian releases initialize; older ones are refused with a notice', async () => {
   for (const version of ['1.14.0', '1.14.5', '1.15.0']) {
-    const app = fixture().app;
+    const app = (await fixture()).app;
     setApiVersion(version); resetNotices();
     const plugin = new PluginClass(app);
-    plugin.onload();
+    await plugin.onload();
     assert.ok(plugin.compact, version);
     assert.equal(notices.length, 0, version);
   }
-  const app = fixture().app;
+  const app = (await fixture()).app;
   setApiVersion('1.13.9'); resetNotices();
   const plugin = new PluginClass(app);
-  plugin.onload();
+  await plugin.onload();
   assert.equal(plugin.compact, undefined);
   assert.match(notices[0], /1\.14\.0 or newer/);
 });
 
 test('native dragover and drop use compact row geometry and save same-column order', async () => {
-  const f = fixture();
+  const f = await fixture();
   const compact = f.plugin.compact;
   const layout = { rows: [{ top: 0, height: 40 }, { top: 48, height: 120 }, { top: 176, height: 40 }] };
   f.plugin.compact = { forColumn: () => layout };
@@ -95,7 +68,7 @@ test('native dragover and drop use compact row geometry and save same-column ord
 });
 
 test('cancelled, unsupported, and cross-column drag contexts do not write', async () => {
-  const f = fixture();
+  const f = await fixture();
   let writes = 0;
   f.app.fileManager.processFrontMatter = async () => { writes++; };
   const cancelled = f.event(150, { defaultPrevented: true });
@@ -114,8 +87,8 @@ test('cancelled, unsupported, and cross-column drag contexts do not write', asyn
   assert.equal(crossColumn.prevented, false);
 });
 
-test('touch cancellation, touch end, and unload clear the drag marker', () => {
-  const f = fixture();
+test('touch cancellation, touch end, and unload clear the drag marker', async () => {
+  const f = await fixture();
   f.plugin.registerDocuments();
   for (const type of ['touchcancel', 'touchend']) {
     const marker = { remove() { this.removed = true; } };
@@ -132,7 +105,7 @@ test('touch cancellation, touch end, and unload clear the drag marker', () => {
 });
 
 test('columns fill the board while a card is dragged and fit again after it ends', async () => {
-  const f = fixture();
+  const f = await fixture();
   const classes = new Set();
   f.view.containerEl.classList = { add: name => classes.add(name), remove: name => classes.delete(name) };
   f.plugin.registerDocuments();
@@ -146,4 +119,36 @@ test('columns fill the board while a card is dragged and fit again after it ends
   f.app.dragManager.draggable = { type: 'file' };
   f.doc.listeners.dragover(f.event(140));
   assert.equal(classes.has('bkt-dragging'), false, 'other drags leave the layout alone');
+});
+
+test('legacy data with only collapsed columns loads with default features', async () => {
+  const f = await fixture({ collapsed: { 'a.base\u0000V': ['done'] } });
+  const keyed = { queryController: { query: { file: { path: 'a.base' } } }, config: { getViewName: () => 'V' } };
+  assert.equal(f.plugin.settings.features.cardPopup, true);
+  assert.equal(f.plugin.collapsedStore.has(keyed, { key: 'done' }), true);
+});
+
+test('updateSettings works on an unsupported Obsidian version', async () => {
+  const app = (await fixture()).app;
+  setApiVersion('1.13.9'); resetNotices();
+  const plugin = new PluginClass(app);
+  await plugin.onload();
+  await plugin.updateSettings(s => { s.autoSort = false; });
+  assert.equal(plugin.savedData.autoSort, false);
+});
+
+test('updateSettings saves the new value and keeps collapsed columns', async () => {
+  const f = await fixture({ collapsed: { 'a.base\u0000V': ['done'] } });
+  await f.plugin.updateSettings(s => { s.autoSort = false; });
+  assert.equal(f.plugin.savedData.autoSort, false);
+  assert.deepEqual(f.plugin.savedData.collapsed, { 'a.base\u0000V': ['done'] });
+});
+
+test('toggling a collapsed column saves data that still has features', async () => {
+  const f = await fixture();
+  const keyed = { queryController: { query: { file: { path: 'a.base' } } }, config: { getViewName: () => 'V' } };
+  f.plugin.collapsedStore.toggle(keyed, { key: 'todo' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.plugin.savedData.collapsed, { 'a.base\u0000V': ['todo'] });
+  assert.equal(f.plugin.savedData.features.cardPopup, true);
 });

@@ -5,32 +5,36 @@ import { CollapsedStore, ColumnCollapse } from './collapse.js';
 import { ScrollMemory } from './scroll.js';
 import { cardContext, addMoveItems } from './move.js';
 import { peekTarget, createCardModal } from './peek.js';
+import { normalizeSettings } from './settings.js';
+import { ToolboxSettingTab } from './settings-tab.js';
 const PROPERTY = 'Position';
 
 export default class BasesKanbanToolbox extends Plugin {
-  onload() {
+  async onload() {
+    this.settings = normalizeSettings(await this.loadData());
+    this.addSettingTab(new ToolboxSettingTab(this.app, this));
     this.active = true;
     this.busy = false;
     this.documents = new WeakSet();
-    this.addCommand({ id: 'undo-reorder', name: 'Undo last card reorder', callback: () => this.undo() });
+    this.views = new Set();
+    // The store shares the settings' collapsed object, so a toggle saves everything.
+    this.collapsedStore = new CollapsedStore(this.settings.collapsed, () => void this.saveSettings());
+    // Hidden from the command palette while manual order is off.
+    this.addCommand({ id: 'undo-reorder', name: 'Undo last card reorder', checkCallback: checking => {
+      if (!this.settings.features.manualOrder) return false;
+      if (!checking) void this.undo();
+      return true;
+    } });
     if (!supported(apiVersion)) {
       new Notice('Bases Kanban Toolbox needs Obsidian ' + MIN_VERSION + ' or newer. Its Kanban features are disabled on this version.', 10000);
       return;
     }
-    this.compact = new CompactLayout();
-    this.collapsedStore = new CollapsedStore({}, data => this.saveData({ ...this.settings, collapsed: data }));
-    this.collapse = new ColumnCollapse(this.collapsedStore, setIcon);
-    this.scroll = new ScrollMemory();
+    this.buildModules();
     this.CardModal = createCardModal(Modal, setIcon);
-    void this.loadData().then(settings => {
-      this.settings = settings || {};
-      Object.assign(this.collapsedStore.data, this.settings.collapsed || {});
-      if (this.active) this.collapse.refresh();
-    });
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => this.collapsedStore.rename(oldPath, file.path)));
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       const context = this.cardMenu;
-      if (this.active && context?.entry.file === file) addMoveItems(menu, context, (error, view, moved) => {
+      if (this.active && this.settings.features.moveToColumn && context?.entry.file === file) addMoveItems(menu, context, (error, view, moved) => {
         if (typeof view.showError === 'function') view.showError(error, moved); else new Notice('Card not moved: ' + error.message, 8000);
       });
     }));
@@ -44,14 +48,50 @@ export default class BasesKanbanToolbox extends Plugin {
     this.app.workspace.onLayoutReady(() => { if (this.active) this.registerDocuments(); });
     this.registerEvent(this.app.workspace.on('layout-change', () => this.registerDocuments()));
     this.registerEvent(this.app.workspace.on('window-open', () => this.registerDocuments()));
-    this.registerEvent(this.app.workspace.on('css-change', () => queueMicrotask(() => { if (this.active) this.collapse.refresh(); })));
+    this.registerEvent(this.app.workspace.on('css-change', () => queueMicrotask(() => { if (this.active) this.collapse?.refresh(); })));
+  }
+  buildModules() {
+    const f = this.settings.features;
+    // CompactLayout owns both compact cards and fitted columns.
+    this.compact = f.compactCards || f.fitColumns ? new CompactLayout(() => this.layoutOptions()) : null;
+    this.collapse = f.collapsibleColumns ? new ColumnCollapse(this.collapsedStore, setIcon) : null;
+    this.scroll = f.scrollRestore ? new ScrollMemory() : null;
+  }
+  teardownModules() {
+    this.scroll?.destroy(); this.collapse?.destroy(); this.compact?.destroy();
+    this.scroll = this.collapse = this.compact = null;
+  }
+  layoutOptions() {
+    const { features, hideWhenEmpty } = this.settings;
+    return { compactCards: features.compactCards, fitColumns: features.fitColumns, hideWhenEmpty };
+  }
+  // The three modules wrap the same prototype methods in a fixed order, and a restore
+  // only undoes the outermost wrapper, so they are rebuilt as a group. Other settings are read per event.
+  applySettings(before) {
+    if (!this.active || !supported(apiVersion)) return;
+    const f = this.settings.features;
+    if (!f.cardPopup) this.cardModal?.close();
+    if (!f.manualOrder) this.clearMarker();
+    const keys = ['compactCards', 'fitColumns', 'collapsibleColumns', 'scrollRestore'];
+    if (keys.every(key => before.features[key] === f[key])) {
+      if (before.hideWhenEmpty.join('\u0000') !== this.settings.hideWhenEmpty.join('\u0000')) this.compact?.refresh();
+      return;
+    }
+    this.teardownModules();
+    this.buildModules();
+    for (const view of this.liveViews()) { this.install(view); view.updateVirtualDisplay(); }
+  }
+  liveViews() {
+    for (const view of this.views) if (!view.containerEl?.isConnected) this.views.delete(view);
+    return [...this.views];
   }
   install(view) {
+    this.views.add(view);
     // Compact first so collapsing lays out after it, on top of the native pass.
     // Scroll restores last, once every column has its final height and offset.
-    this.compact.install(view);
-    this.collapse.install(view);
-    this.scroll.install(view);
+    this.compact?.install(view);
+    this.collapse?.install(view);
+    this.scroll?.install(view);
   }
   registerDocuments() {
     if (!this.active) return;
@@ -60,7 +100,7 @@ export default class BasesKanbanToolbox extends Plugin {
       this.documents.add(doc);
       // Native card clicks skip prevented events, so the popup replaces navigation.
       this.registerDomEvent(doc, 'click', e => {
-        const context = this.active && this.compact && this.CardModal ? peekTarget(e, this.compact.views, this.app) : null;
+        const context = this.active && this.settings.features.cardPopup && this.CardModal ? peekTarget(e, this.liveViews(), this.app) : null;
         if (!context) return;
         e.preventDefault();
         this.cardModal?.close();
@@ -69,7 +109,7 @@ export default class BasesKanbanToolbox extends Plugin {
       }, { capture: true });
       // Native card menus fire file-menu while this contextmenu event is dispatched.
       this.registerDomEvent(doc, 'contextmenu', e => {
-        this.cardMenu = this.compact ? cardContext(this.compact.views, e.target) : null;
+        this.cardMenu = cardContext(this.liveViews(), e.target);
         if (this.cardMenu) window.setTimeout(() => { this.cardMenu = null; }, 0);
       }, { capture: true });
       this.registerDomEvent(doc, 'dragstart', () => queueMicrotask(() => this.markDragging()), { capture: true });
@@ -84,7 +124,7 @@ export default class BasesKanbanToolbox extends Plugin {
     this.app.workspace.iterateAllLeaves(leaf => register(leaf.view.containerEl?.ownerDocument));
     this.app.workspace.iterateAllLeaves(leaf => {
       const view = leaf.view.controller?.view;
-      if (view?.type === 'kanban' && this.compact) { this.install(view); view.updateVirtualDisplay(); }
+      if (view?.type === 'kanban') { this.install(view); view.updateVirtualDisplay(); }
     });
     this.compact?.refresh();
   }
@@ -103,7 +143,16 @@ export default class BasesKanbanToolbox extends Plugin {
     // After native drop handlers, which already resolved their target column.
     if (container) window.setTimeout(() => container.classList.remove('bkt-dragging'), 0);
   }
-  onunload() { this.active = false; this.cardModal?.close(); this.clearMarker(); this.dragContainer?.classList.remove('bkt-dragging'); this.dragContainer = null; this.scroll?.destroy(); this.collapse?.destroy(); this.compact?.destroy(); }
+  onunload() { this.active = false; this.cardModal?.close(); this.clearMarker(); this.dragContainer?.classList.remove('bkt-dragging'); this.dragContainer = null; this.teardownModules(); }
+  async saveSettings() { await this.saveData(this.settings); }
+  async updateSettings(mutate) {
+    const before = normalizeSettings(this.settings);
+    mutate(this.settings);
+    this.settings = normalizeSettings(this.settings);
+    this.collapsedStore.data = this.settings.collapsed;
+    await this.saveSettings();
+    this.applySettings(before);
+  }
   clearMarker() { this.marker?.remove(); this.marker = null; }
   io() {
     return {
@@ -116,6 +165,7 @@ export default class BasesKanbanToolbox extends Plugin {
     };
   }
   handleDrag(event, dropping) {
+    if (!this.settings.features.manualOrder) return;
     this.clearMarker();
     if (!this.active || event.defaultPrevented) return;
     try {

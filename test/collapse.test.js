@@ -39,11 +39,14 @@ test('store toggles per view, persists, drops empty views and follows renames', 
 });
 
 function element() {
-  const classes = new Set(), children = [], listeners = {};
+  // listeners keeps the latest callback per type; handlers keeps all of them, as the DOM does.
+  const classes = new Set(), children = [], listeners = {}, handlers = {};
   const el = {
-    classes, children, listeners, style: {}, attrs: {}, parentElement: null,
+    classes, children, listeners, handlers, style: {}, attrs: {}, parentElement: null,
     classList: { toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)), contains: name => classes.has(name), remove: name => classes.delete(name) },
-    addEventListener(type, callback) { listeners[type] = callback; },
+    addEventListener(type, callback) { listeners[type] = callback; (handlers[type] ||= []).push(callback); },
+    removeEventListener(type, callback) { handlers[type] = (handlers[type] || []).filter(item => item !== callback); if (listeners[type] === callback) listeners[type] = handlers[type].at(-1); },
+    dispatch(type, event) { for (const callback of [...(handlers[type] || [])]) callback(event); },
     setAttribute(name, value) { this.attrs[name] = value; },
     setCssStyles(styles) { Object.assign(this.style, styles); },
     appendChild(child) { child.parentElement = el; children.push(child); },
@@ -120,4 +123,47 @@ test('layout keeps native widths without collapsed columns and narrows collapsed
   assert.equal(View.prototype.updateVirtualDisplay, original.view);
   assert.equal(Column.prototype.render, original.render);
   assert.equal(todo.headerEl.children.length, 0);
+});
+
+test('a rebuilt collapse module leaves one live header listener', () => {
+  const store = new CollapsedStore();
+  const { view } = board(['todo']);
+  const [todo] = view.columns;
+  const first = new ColumnCollapse(store, () => {});
+  first.install(view);
+  view.updateVirtualDisplay();
+  store.toggle(view, todo.group);
+  first.destroy();
+  const second = new ColumnCollapse(store, () => {});
+  second.install(view);
+  view.updateVirtualDisplay();
+  assert.equal(todo.containerEl.classes.has('bkt-collapsed'), true);
+  let toggles = 0;
+  const toggle = store.toggle.bind(store);
+  store.toggle = (...args) => { toggles++; return toggle(...args); };
+  let stale = 0;
+  first.toggle = () => { stale++; };
+  todo.headerEl.dispatch('click', { defaultPrevented: false });
+  assert.equal(toggles, 1);
+  assert.equal(stale, 0, 'the destroyed module no longer handles header clicks');
+  assert.equal(todo.headerEl.handlers.click.length, 1);
+  second.destroy();
+  assert.equal(todo.headerEl.handlers.click.length, 0);
+});
+
+test('closed boards release their header listeners on refresh', () => {
+  const store = new CollapsedStore();
+  const { view } = board(['todo']);
+  view.containerEl.isConnected = true;
+  const collapse = new ColumnCollapse(store, () => {});
+  collapse.install(view);
+  view.updateVirtualDisplay();
+  assert.equal(collapse.headerListeners.get(view)?.length, 1);
+  view.containerEl.isConnected = false;
+  collapse.refresh();
+  assert.equal(collapse.headerListeners.has(view), false);
+  view.containerEl.isConnected = true;
+  view.updateVirtualDisplay();
+  assert.equal(view.columns[0].headerEl.handlers.click.length, 1, 'a reconnected board gets its listener back');
+  collapse.destroy();
 });

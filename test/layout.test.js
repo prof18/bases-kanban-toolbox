@@ -131,7 +131,7 @@ function makeHarness({ covers = false } = {}) {
   const view = Object.assign(Object.create(protoView), {
     nativeViewUpdates: 0, columns: [], unusedItems: [], imageProp: covers ? 'Cover' : null,
     measurements: { ...measurements, cardHeight: covers ? measurements.cardHeight + measurements.coverHeight : measurements.cardHeight }, data: { properties: props }, pendingMove: false, cardDrag: null,
-    containerEl: { style: { setProperty(name, value) { this[name] = value; } }, isShown: () => true, isConnected: true,
+    containerEl: { style: { setProperty(name, value) { this[name] = value; }, removeProperty(name) { delete this[name]; } }, isShown: () => true, isConnected: true,
       classes: new Set(), classList: { add: (...names) => names.forEach(name => view.containerEl.classes.add(name)), remove: (...names) => names.forEach(name => view.containerEl.classes.delete(name)) } },
     scrollEl: { matchParent: () => false },
   });
@@ -252,4 +252,37 @@ test('titles are not measured until the wrap styles apply, then the layout refre
   whiteSpace = 'normal';
   assert.equal(typeof manager.titleMeasurer(column)?.measure, 'function');
   assert.equal(frames.length, 0);
+});
+
+test('compact cards off keeps fitted columns but lays cards out natively', () => {
+  const h = makeHarness(), manager = new CompactLayout(() => ({ compactCards: false, fitColumns: true, hideWhenEmpty: [] }));
+  manager.install(h.view); h.view.updateVirtualDisplay();
+  assert.ok(h.view.containerEl.classes.has('bkt-fit'));
+  assert.equal(manager.forColumn(h.column), null);
+  manager.destroy();
+});
+
+test('fitted columns off removes the fit class and pad but keeps compact cards', () => {
+  const options = { compactCards: true, fitColumns: true, hideWhenEmpty: [] };
+  const h = makeHarness(), manager = new CompactLayout(() => options);
+  manager.install(h.view); h.view.updateVirtualDisplay();
+  assert.ok(h.view.containerEl.classes.has('bkt-fit'));
+  assert.notEqual(h.view.containerEl.style['--bkt-pad-block'], undefined);
+  options.fitColumns = false;
+  h.view.updateVirtualDisplay();
+  assert.equal(h.view.containerEl.classes.has('bkt-fit'), false);
+  assert.equal(h.view.containerEl.style['--bkt-pad-block'], undefined);
+  assert.ok(manager.forColumn(h.column));
+  manager.destroy();
+});
+
+test('columns that are plain objects never patch Object.prototype', () => {
+  const protoView = { updateVirtualDisplay() {} };
+  const view = Object.assign(Object.create(protoView), { columns: [{ view: null, items: [] }], unusedItems: [], data: { properties: props }, measurements,
+    containerEl: { style: { setProperty() {} }, isShown: () => false, classList: { add() {}, remove() {} } }, scrollEl: { matchParent: () => false } });
+  const manager = new CompactLayout();
+  manager.install(view);
+  view.updateVirtualDisplay();
+  assert.equal(Object.prototype.updateVirtualDisplay, undefined);
+  manager.destroy();
 });

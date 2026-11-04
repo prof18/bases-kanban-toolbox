@@ -36,7 +36,11 @@ export function compactAllowed(view) {
 // Obsidian 1.14.4 uses absolute positions and virtualizes cards. Keep that
 // lifecycle, but calculate each row from the properties it actually displays.
 export class CompactLayout {
-  constructor() { this.restores = []; this.views = new Set(); this.layouts = new WeakMap(); this.titleMeasurements = new WeakMap(); }
+  // options() is read on every pass, so settings changes apply without rebuilding.
+  constructor(options = () => ({ compactCards: true, fitColumns: true, hideWhenEmpty: [] })) {
+    this.options = options; this.restores = []; this.views = new Set(); this.layouts = new WeakMap(); this.titleMeasurements = new WeakMap();
+  }
+  allowed(view) { return this.options().compactCards && compactAllowed(view); }
   titleMeasurer(column) {
     const view = column.view;
     const line = column.items[0]?.props[0]?.lineEl || view.columns.find(c => c.items[0]?.props[0]?.lineEl)?.items[0].props[0].lineEl;
@@ -104,9 +108,14 @@ export class CompactLayout {
       manager.installColumns(view);
       // Columns end below their last card instead of filling the board height.
       const pad = view.measurements?.pad;
-      view.containerEl.classList.add('bkt-fit');
-      if (pad) view.containerEl.style.setProperty('--bkt-pad-block', (pad.top || 0) + (pad.bottom || 0) + 'px');
-      if (compactAllowed(view) && view.containerEl.isShown()) {
+      if (manager.options().fitColumns) {
+        view.containerEl.classList.add('bkt-fit');
+        if (pad) view.containerEl.style.setProperty('--bkt-pad-block', (pad.top || 0) + (pad.bottom || 0) + 'px');
+      } else {
+        view.containerEl.classList.remove('bkt-fit');
+        view.containerEl.style.removeProperty('--bkt-pad-block');
+      }
+      if (manager.allowed(view) && view.containerEl.isShown()) {
         for (const column of view.columns) if (column.containerEl.isConnected) {
           column.readViewport();
           column.updateVirtualDisplay();
@@ -123,9 +132,10 @@ export class CompactLayout {
   installColumns(view) {
     if (this.columnPrototype || !view.columns?.length) return;
     const prototype = Object.getPrototypeOf(view.columns[0]);
+    if (typeof prototype.updateVirtualDisplay !== 'function') return;
     this.columnPrototype = prototype;
     this.restores.push(patchMethod(prototype, 'updateVirtualDisplay', this, (manager, column, method, args) => {
-      if (!compactAllowed(column.view) || !column.viewport || !column.group || !column.view.measurements.cardHeight) {
+      if (!manager.allowed(column.view) || !column.viewport || !column.group || !column.view.measurements.cardHeight) {
         manager.layouts.delete(column);
         manager.restoreCards(column.view, [...column.items, ...column.view.unusedItems]);
         return method.apply(column, args);
@@ -171,7 +181,7 @@ export class CompactLayout {
   }
   forColumn(column) {
     const layout = this.layouts.get(column);
-    return layout && compactAllowed(column.view) && layout.rows.length === column.group.entries.length
+    return layout && this.allowed(column.view) && layout.rows.length === column.group.entries.length
       && layout.rows.every((row, index) => row.entry.file === column.group.entries[index].file) ? layout : null;
   }
   refresh() {

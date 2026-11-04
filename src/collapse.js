@@ -56,7 +56,7 @@ export class CollapsedStore {
 // in the viewport. Views with a collapsed column are laid out again after the
 // native pass, with narrow strips and every column attached.
 export class ColumnCollapse {
-  constructor(store, setIcon) { this.store = store; this.setIcon = setIcon; this.restores = []; this.views = new Set(); this.headers = new WeakSet(); }
+  constructor(store, setIcon) { this.store = store; this.setIcon = setIcon; this.restores = []; this.views = new Set(); this.headers = new WeakSet(); this.headerListeners = new Map(); }
   install(view) {
     if (this.viewPrototype) return;
     const prototype = Object.getPrototypeOf(view), original = prototype.updateVirtualDisplay;
@@ -89,9 +89,14 @@ export class ColumnCollapse {
     if (!this.headers.has(header)) {
       this.headers.add(header);
       // A collapsed strip is mostly header, so the whole strip expands it.
-      header.addEventListener('click', event => {
+      const listener = event => {
         if (column.group && column.containerEl.classList.contains(CLASS) && !event.defaultPrevented) this.toggle(column);
-      });
+      };
+      header.addEventListener('click', listener);
+      // destroy removes it, so a rebuilt module doesn't stack a second live listener.
+      // Kept per view, so refresh can drop a closed board's entries.
+      if (!this.headerListeners.has(view)) this.headerListeners.set(view, []);
+      this.headerListeners.get(view).push([header, listener]);
     }
     let button = header.querySelector(':scope > .bkt-collapse');
     if (!button) {
@@ -115,7 +120,8 @@ export class ColumnCollapse {
     if (!view.data || !Array.isArray(view.columns) || !container?.isShown?.() || !measurements) return;
     const collapsed = view.columns.map(column => Boolean(column.group) && this.store.has(view, column.group));
     view.columns.forEach((column, index) => {
-      if (column.containerEl.classList.contains(CLASS) !== collapsed[index] || !column.headerEl?.querySelector(':scope > .bkt-collapse')) this.decorate(column);
+      if (column.containerEl.classList.contains(CLASS) !== collapsed[index] || !column.headerEl?.querySelector(':scope > .bkt-collapse')
+        || (column.headerEl && !this.headers.has(column.headerEl))) this.decorate(column);
     });
     if (!collapsed.some(Boolean)) return;
     // Mirror the native preview of a column being dragged to a new index.
@@ -140,14 +146,20 @@ export class ColumnCollapse {
     });
     container.style.width = Math.max(0, offsets.end - measurements.columnGap + measurements.pad.end) + 'px';
   }
+  releaseHeaders(view) {
+    // Forgetting the header lets decorate add the listener again if the board reconnects.
+    for (const [header, listener] of this.headerListeners.get(view) || []) { header.removeEventListener('click', listener); this.headers.delete(header); }
+    this.headerListeners.delete(view);
+  }
   refresh() {
     for (const view of this.views) {
-      if (!view.containerEl.isConnected) this.views.delete(view);
+      if (!view.containerEl.isConnected) { this.views.delete(view); this.releaseHeaders(view); }
       else view.updateVirtualDisplay();
     }
   }
   destroy() {
     this.restores.reverse().forEach(restore => restore());
+    for (const view of [...this.headerListeners.keys()]) this.releaseHeaders(view);
     for (const view of this.views) {
       for (const column of view.columns || []) {
         column.containerEl.classList.remove(CLASS);
