@@ -46,6 +46,12 @@ export function createCardModal(Modal, setIcon) {
         if (this.embed === embed && typeof embed.showEditor === 'function') embed.showEditor();
       });
     }
+    // With Vim key bindings, Esc first returns the editor to normal mode; the next Esc closes the popup.
+    onEscapeKey(event) {
+      const editor = this.embed?.editMode?.editor, vim = editor?.cm?.cm?.state?.vim;
+      if (vim && (vim.mode || 'normal') !== 'normal' && editor.hasFocus()) return;
+      super.onEscapeKey(event);
+    }
     onClose() {
       const embed = this.embed;
       this.embed = null;
