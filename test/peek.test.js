@@ -69,3 +69,25 @@ test('the popup loads an editable embed, saves pending edits on close and can op
   button.listeners.click();
   assert.deepEqual(opened, [['items/B.md', false]]);
 });
+
+test('Esc leaves a Vim mode in the focused editor before it closes the popup', () => {
+  const escapeKeyEvents = [];
+  class Modal { constructor(app) { this.app = app; } onEscapeKey(event) { escapeKeyEvents.push(event); } }
+  const CardModal = createCardModal(Modal, () => {});
+  const modal = new CardModal({}, { path: 'items/A.md' });
+  const vim = {}, editor = { cm: { cm: { state: { vim } } }, focused: true, hasFocus() { return this.focused; } };
+
+  const pressEscapeInMode = mode => { vim.mode = mode; const before = escapeKeyEvents.length; modal.onEscapeKey({}); return escapeKeyEvents.length > before; };
+
+  assert.equal(pressEscapeInMode('insert'), true, 'no editor yet');
+  modal.embed = { editMode: { editor } };
+
+  for (const mode of ['insert', 'replace', 'visual', 'visual line', 'visual block']) assert.equal(pressEscapeInMode(mode), false, mode);
+  assert.equal(pressEscapeInMode('normal'), true);
+  assert.equal(pressEscapeInMode(undefined), true, 'no mode change yet');
+  editor.focused = false;
+  assert.equal(pressEscapeInMode('insert'), true, 'focus outside the editor');
+  delete editor.cm.cm.state.vim;
+  editor.focused = true;
+  assert.equal(pressEscapeInMode('insert'), true, 'Vim key bindings off');
+});
